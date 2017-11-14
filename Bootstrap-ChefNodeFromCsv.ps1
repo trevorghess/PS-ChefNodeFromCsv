@@ -175,7 +175,6 @@ foreach($computer in $computers){
     Write-Host "Preparing $ipv4 for bootstrap"
 
     if($computer.{Guest OS} -like 'Microsoft Windows*'){
-        $DomainName = $computer.{Name}
         Bootstrap-WindowsNode -PSCred $pscred -ComputerName $computer.{Name} -DomainName $DomainName -ChefClientDownloadUrl $ChefClientDownloadUrl -CustomerName $CustomerName -ChefServerUrl $ChefServerUrl -ValidatorName $ValidatorName -Environment $Environment -CertName $CertName
     }
     else{
