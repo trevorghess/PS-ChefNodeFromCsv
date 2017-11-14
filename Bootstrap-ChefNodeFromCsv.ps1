@@ -1,25 +1,44 @@
 Param
 (
-    # Parameter help description
+    # Source CSV to Bootstrap
     [Parameter(Mandatory=$true)]
     [String]
     $SourceCsv,
 
-    # Parameter help description
+    # Domain name to be used for running tasks on nodes
     [Parameter(Mandatory=$true)]
     [String]
     $DomainName,
 
-    # Parameter help description
+    # Username for connecting to nodes and running tasks
     [Parameter(Mandatory=$true)]
     [String]
     $Username,
 
-    # Parameter help description
+    # Customer name for server
+    [Parameter(Mandatory=$true)]
+    [String]
+    $CustomerName,       
+
+    # Chef Server URL for knife rb
+    [Parameter(Mandatory=$true)]
+    [String]
+    $ChefServerUrl,       
+
+    # Validator file name for knife rb
+    [Parameter(Mandatory=$true)]
+    [String]
+    $ValidatorName,  
+
+    # Location to download chef client installer from
     [Parameter()]
     [String]
-    $ChefClientDownloadUrl = "https://packages.chef.io/files/stable/chef/13.6.4/windows/2016/chef-client-13.6.4-1-x64.msi"
-)
+    $ChefClientDownloadUrl = "https://packages.chef.io/files/stable/chef/13.6.4/windows/2016/chef-client-13.6.4-1-x64.msi",       
+
+    # Target chef environment
+    [String]
+    $Environment = ''
+    )
 function Bootstrap-WindowsNode {
     Param(
         # Parameter help description
@@ -31,24 +50,80 @@ function Bootstrap-WindowsNode {
         [Parameter(Mandatory=$true)]
         [String]
         $ComputerName,
+
+        # Parameter help description
+        [Parameter(Mandatory=$true)]
+        [String]
+        $DomainName,
         
         # Parameter help description
         [Parameter(Mandatory=$true)]
         [String]
-        $ChefClientDownloadUrl
+        $ChefClientDownloadUrl,
+        
+        # Parameter help description
+        [Parameter(Mandatory=$true)]
+        [String]
+        $CustomerName,       
+    
+        # Parameter help description
+        [Parameter(Mandatory=$true)]
+        [String]
+        $ChefServerUrl,       
+    
+        # Parameter help description
+        [Parameter(Mandatory=$true)]
+        [String]
+        $ValidatorName, 
+
+        # Parameter help description
+        [String]
+        $Environment = '' 
     )
     Write-Host "Bootstrapping Windows Node"
-    Enter-PSSession -ComputerName $ComputerName -Credential $PSCred
-    Write-Host "Entered PSSession at $ComputerName"
-    Set-ExecutionPolicy -ExecutionPolicy Bypass -Force
-    # Write-Host "Creating Bootstrap Files"
-    # ./Create-BootstrapFiles.ps1 -ChefServerUrl 'https://api.chef.io/organizations/hessco' -ClientBU 'Test' -ValidatorName 'thess-validator' -LogLocation ':win_evt'
-    # Write-Host "Downloading Chef Client from $ChefClientDownloadUrl" 
-    # Invoke-WebRequest -Uri $ChefClientDownloadUrl -OutFile "chef-client.msi" 
-    # Write-Host "Installing Chef Client"
-    # Start-Process msiexec.exe -Wait -ArgumentList '/I chef-client.msi /qn ADDLOCAL="ChefClientFeature" /L*V! "C:\repos\bootstrap\ccmsilog.log" ' -Verbose -NoNewWindow
-    # Write-Host "Running Chef Client"
-    # Start-Process cmd.exe -Wait '/c "c:\opscode\chef\bin\chef-client.bat -j c:\chef\first-boot.json"'
+    $session = New-PSSession -ComputerName $ComputerName -Credential $PSCred -ErrorAction Stop
+
+    Write-Host "Entering PSSession at $ComputerName"
+    Invoke-Command -Session $session -ScriptBlock {
+        $ComputerName = $args[0]
+        Write-Host "On remote computer $ComputerName"
+        Set-ExecutionPolicy -ExecutionPolicy Bypass -Force
+    } -ArgumentList $ComputerName
+
+    Write-Host "Creating Bootstrap Files"
+    $location = Get-Location
+    Write-Host "$location\thess-validator.pem"
+    Invoke-Command -Session $session -ScriptBlock{
+        $TargetDir = "C:\bootstraptemp"
+        if(!(Test-Path -Path $TargetDir )){
+            New-Item -Path $TargetDir -ItemType Directory
+        }
+    }
+
+    Write-Host "Copying files to remote machine"
+    Copy-Item -ToSession $session "$location\thess-validator.pem" -Destination C:\thess-validator.pem
+    Copy-Item -ToSession $session "$location\Install-ChefClient.ps1"-Destination C:\bootstraptemp\Install-ChefClient.ps1
+    Copy-Item -ToSession $session "$location\Register-ChefNode.ps1" -Destination C:\bootstraptemp\Register-ChefNode.ps1
+
+    Invoke-Command -Session $session -FilePath ./Create-BootstrapFiles.ps1 -ArgumentList $CustomerName, $ChefServerUrl, $ValidatorName, $Environment,':win_evt'
+    Invoke-Command -Session $session -ScriptBlock{
+        param($DomainName, $Username, $ChefClientDownloadUrl)
+        Remove-Item C:/thess-validator.pem -Force
+        Write-Host "Cleaning up validator"
+        $installTaskAction = New-ScheduledTaskAction -Execute "Powershell.exe" -Argument "-ExecutionPolicy Bypass -File C:\bootstraptemp\Install-ChefClient.ps1 $ChefClientDownloadUrl"
+        $installTaskTrigger = New-ScheduledTaskTrigger -Once -At (Get-Date).AddDays(7)
+        $installTaskPrincipal = New-ScheduledTaskPrincipal "$DomainName\$Username" -RunLevel Highest
+        $installTaskSettings = New-ScheduledTaskSettingsSet
+        $installTask = New-ScheduledTask -Action $installTaskAction -Principal $installTaskPrincipal -Trigger $installTaskTrigger -Settings $installTaskSettings
+        Register-ScheduledTask Install-ChefClient -InputObject $installTask
+        $registerTaskAction = New-ScheduledTaskAction -Execute "Powershell.exe" -Argument "-ExecutionPolicy Bypass -File C:\bootstraptemp\Register-ChefNode.ps1"
+        $registerTaskTrigger = New-ScheduledTaskTrigger -Once -At (Get-Date).AddDays(7)
+        $registerTaskPrincipal = New-ScheduledTaskPrincipal "$DomainName\$Username" -RunLevel Highest
+        $registerTaskSettings = New-ScheduledTaskSettingsSet
+        $registerTask = New-ScheduledTask -Action $registerTaskAction -Principal $registerTaskPrincipal -Trigger $registerTaskTrigger -Settings $registerTaskSettings
+        Register-ScheduledTask Register-ChefNode -InputObject $registerTask
+        Start-ScheduledTask Install-ChefClient
+    } -ArgumentList $DomainName, $Username, $ChefClientDownloadUrl
     Exit-PSSession
     
 }
@@ -84,7 +159,7 @@ foreach($computer in $computers){
     Write-Host "Preparing $ipv4 for bootstrap"
 
     if($computer.{Guest OS} -like 'Microsoft Windows*'){
-        Bootstrap-WindowsNode -PSCred $pscred -ComputerName $computer.{Name} -ChefClientDownloadUrl $ChefClientDownloadUrl
+        Bootstrap-WindowsNode -PSCred $pscred -ComputerName $computer.{Name} -DomainName $DomainName -ChefClientDownloadUrl $ChefClientDownloadUrl -CustomerName $CustomerName -ChefServerUrl $ChefServerUrl -ValidatorName $ValidatorName -Environment $Environment
     }
     else{
         Bootstrap-LinuxNode

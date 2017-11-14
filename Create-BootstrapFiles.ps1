@@ -45,7 +45,7 @@ function Create-ClientRBFile {
 
 # Create the first-boot.json file. This runlist may need to be edited to specify the appropriate runlist and additional info (i.e. system_info)
 function Create-FirstBootFile {
-    write-output "{`"run_list`": [`"recipe[starter::default]`"], `"system_info`": {`"business_unit`": `"[$ClientBU]`"}}" | Out-File -FilePath $ChefRootDir\$ChefFirstBootFile -Encoding ascii
+    write-output "{`"run_list`": [`"recipe[it_chef_client::default]`"], `"system_info`": {`"customer`": `"[$ClientBU]`"}}" | Out-File -FilePath $ChefRootDir\$ChefFirstBootFile -Encoding ascii
 }
 
 ### Let's make the client.rb
