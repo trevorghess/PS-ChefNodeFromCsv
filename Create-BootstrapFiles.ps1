@@ -22,10 +22,15 @@ Param
     
     # This is the log location variable for the client RB file
     [String]
-    $LogLocation = "'STDOUT'"
+    $LogLocation = "'STDOUT'",
+
+    #Name of our certificate for trusted_certs
+    [String]
+    $CertName = ''
 )
 
 $ChefRootDir = "c:\chef"
+$CertPath = "c:\chef\trusted_certs"
 $ChefClientRBFile = "client.rb"
 $ChefFirstBootFile = "first-boot.json"
 #$ClientEnv = "non-prod"
@@ -46,6 +51,13 @@ function Create-ClientRBFile {
 # Create the first-boot.json file. This runlist may need to be edited to specify the appropriate runlist and additional info (i.e. system_info)
 function Create-FirstBootFile {
     write-output "{`"run_list`": [`"recipe[it_chef_client::default]`"], `"system_info`": {`"customer`": `"[$ClientBU]`"}}" | Out-File -FilePath $ChefRootDir\$ChefFirstBootFile -Encoding ascii
+}
+
+if($CertName -ne ''){
+    Write-Host "$CertPath"
+    if (!(Test-Path -Path "$CertPath")){
+        New-Item -Path "$CertPath" -Type Directory
+    }
 }
 
 ### Let's make the client.rb
@@ -86,14 +98,16 @@ else{
         Out-File -FilePath "$ChefRootDir\$ChefFirstBootFile" -Encoding ascii
     }
 
+
     # now that the file exists, populate it!
     Create-FirstBootFile
 }
-# Add a randomized delay to keep large deployments from overloading the Chef Server
-#Start-Sleep -Seconds $(Get-Random -Minimum 60 -Maximum 3600)
 
 # Add hack so the script will run in PS 2.0 and higher ($PSScriptRoot isn't a thing in PS2.0 so this will use the old way to get the path)
 if(!$PSScriptRoot){ $PSScriptRoot = Split-Path $MyInvocation.MyCommand.Path -Parent }
 
 # Last but not least, copy the validator file from the SCCM cache directory into the $ChefRootDir with the other files
 Copy-Item -Path "$PSScriptRoot\$ValidatorName.pem" -Destination $ChefRootDir
+if($CertName -ne ""){
+    Copy-Item -Path "$PSScriptRoot\$CertName.crt" -Destination "$CertPath\$CertName.crt"
+}

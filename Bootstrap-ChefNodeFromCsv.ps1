@@ -36,9 +36,15 @@ Param
     $ChefClientDownloadUrl = "https://packages.chef.io/files/stable/chef/13.6.4/windows/2016/chef-client-13.6.4-1-x64.msi",       
 
     # Target chef environment
+    [Parameter()]
     [String]
-    $Environment = ''
-    )
+    $Environment = '',
+
+    # Parameter help description
+    [Parameter()]
+    [String]
+    $CertName = ''
+)
 function Bootstrap-WindowsNode {
     Param(
         # Parameter help description
@@ -78,7 +84,11 @@ function Bootstrap-WindowsNode {
 
         # Parameter help description
         [String]
-        $Environment = '' 
+        $Environment = '',
+        
+        # Parameter help description
+        [String]
+        $CertName = ''
     )
     Write-Host "Bootstrapping Windows Node"
     $session = New-PSSession -ComputerName $ComputerName -Credential $PSCred -ErrorAction Stop
@@ -92,7 +102,7 @@ function Bootstrap-WindowsNode {
 
     Write-Host "Creating Bootstrap Files"
     $location = Get-Location
-    Write-Host "$location\thess-validator.pem"
+    Write-Host "$location\$ValidatorName.pem"
     Invoke-Command -Session $session -ScriptBlock{
         $TargetDir = "C:\bootstraptemp"
         if(!(Test-Path -Path $TargetDir )){
@@ -101,14 +111,20 @@ function Bootstrap-WindowsNode {
     }
 
     Write-Host "Copying files to remote machine"
-    Copy-Item -ToSession $session "$location\thess-validator.pem" -Destination C:\thess-validator.pem
+    Copy-Item -ToSession $session "$location\$ValidatorName.pem" -Destination C:\$ValidatorName.pem
     Copy-Item -ToSession $session "$location\Install-ChefClient.ps1"-Destination C:\bootstraptemp\Install-ChefClient.ps1
     Copy-Item -ToSession $session "$location\Register-ChefNode.ps1" -Destination C:\bootstraptemp\Register-ChefNode.ps1
+    if($CertName -ne ""){
+        Copy-Item -ToSession $session "$location\$CertName.crt" -Destination C:\$CertName.crt
+    }
 
-    Invoke-Command -Session $session -FilePath ./Create-BootstrapFiles.ps1 -ArgumentList $CustomerName, $ChefServerUrl, $ValidatorName, $Environment,':win_evt'
+    Invoke-Command -Session $session -FilePath ./Create-BootstrapFiles.ps1 -ArgumentList $CustomerName, $ChefServerUrl, $ValidatorName, $Environment,':win_evt', $CertName
     Invoke-Command -Session $session -ScriptBlock{
         param($DomainName, $Username, $ChefClientDownloadUrl)
-        Remove-Item C:/thess-validator.pem -Force
+        Remove-Item C:/$ValidatorName.pem -Force
+        if(Test-Path -Path C:/$CertName.crt){
+            Remove-Item C:/$CertName.crt -Force
+        }
         Write-Host "Cleaning up validator"
         $installTaskAction = New-ScheduledTaskAction -Execute "Powershell.exe" -Argument "-ExecutionPolicy Bypass -File C:\bootstraptemp\Install-ChefClient.ps1 $ChefClientDownloadUrl"
         $installTaskTrigger = New-ScheduledTaskTrigger -Once -At (Get-Date).AddDays(7)
@@ -159,7 +175,8 @@ foreach($computer in $computers){
     Write-Host "Preparing $ipv4 for bootstrap"
 
     if($computer.{Guest OS} -like 'Microsoft Windows*'){
-        Bootstrap-WindowsNode -PSCred $pscred -ComputerName $computer.{Name} -DomainName $DomainName -ChefClientDownloadUrl $ChefClientDownloadUrl -CustomerName $CustomerName -ChefServerUrl $ChefServerUrl -ValidatorName $ValidatorName -Environment $Environment
+        $DomainName = $computer.{Name}
+        Bootstrap-WindowsNode -PSCred $pscred -ComputerName $computer.{Name} -DomainName $DomainName -ChefClientDownloadUrl $ChefClientDownloadUrl -CustomerName $CustomerName -ChefServerUrl $ChefServerUrl -ValidatorName $ValidatorName -Environment $Environment -CertName $CertName
     }
     else{
         Bootstrap-LinuxNode
