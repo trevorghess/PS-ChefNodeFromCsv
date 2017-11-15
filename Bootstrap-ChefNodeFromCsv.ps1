@@ -80,7 +80,17 @@ function Bootstrap-WindowsNode {
         # Parameter help description
         [Parameter(Mandatory=$true)]
         [String]
-        $ValidatorName, 
+        $ValidatorName,       
+        
+        # Parameter help description
+        [Parameter(Mandatory=$true)]
+        [String]
+        $Username, 
+
+        # Parameter help description
+        [Parameter(Mandatory=$true)]
+        [securestring]
+        $Password,
 
         # Parameter help description
         [String]
@@ -90,6 +100,9 @@ function Bootstrap-WindowsNode {
         [String]
         $CertName = ''
     )
+    $Ptr = [System.Runtime.InteropServices.Marshal]::SecureStringToCoTaskMemUnicode($Password)
+    $result = [System.Runtime.InteropServices.Marshal]::PtrToStringUni($Ptr)
+    [System.Runtime.InteropServices.Marshal]::ZeroFreeCoTaskMemUnicode($Ptr)
     Write-Host "Bootstrapping Windows Node"
     $session = New-PSSession -ComputerName $ComputerName -Credential $PSCred -ErrorAction Stop
 
@@ -120,7 +133,7 @@ function Bootstrap-WindowsNode {
 
     Invoke-Command -Session $session -FilePath ./Create-BootstrapFiles.ps1 -ArgumentList $CustomerName, $ChefServerUrl, $ValidatorName, $Environment,':win_evt', $CertName
     Invoke-Command -Session $session -ScriptBlock{
-        param($DomainName, $Username, $ChefClientDownloadUrl)
+        param($DomainName, $Username, $Password, $ChefClientDownloadUrl)
         Remove-Item C:/$ValidatorName.pem -Force
         if(Test-Path -Path C:/$CertName.crt){
             Remove-Item C:/$CertName.crt -Force
@@ -128,18 +141,14 @@ function Bootstrap-WindowsNode {
         Write-Host "Cleaning up validator"
         $installTaskAction = New-ScheduledTaskAction -Execute "Powershell.exe" -Argument "-ExecutionPolicy Bypass -File C:\bootstraptemp\Install-ChefClient.ps1 $ChefClientDownloadUrl"
         $installTaskTrigger = New-ScheduledTaskTrigger -Once -At (Get-Date).AddDays(7)
-        $installTaskPrincipal = New-ScheduledTaskPrincipal "$DomainName\$Username" -RunLevel Highest
         $installTaskSettings = New-ScheduledTaskSettingsSet
-        $installTask = New-ScheduledTask -Action $installTaskAction -Principal $installTaskPrincipal -Trigger $installTaskTrigger -Settings $installTaskSettings
-        Register-ScheduledTask Install-ChefClient -InputObject $installTask
+        Register-ScheduledTask -TaskName Install-ChefClient -RunLevel Highest -User "$DomainName\$Username" -Password $Password -Action $installTaskAction -Trigger $installTaskTrigger -Settings $installTaskSettings
         $registerTaskAction = New-ScheduledTaskAction -Execute "Powershell.exe" -Argument "-ExecutionPolicy Bypass -File C:\bootstraptemp\Register-ChefNode.ps1"
         $registerTaskTrigger = New-ScheduledTaskTrigger -Once -At (Get-Date).AddDays(7)
-        $registerTaskPrincipal = New-ScheduledTaskPrincipal "$DomainName\$Username" -RunLevel Highest
         $registerTaskSettings = New-ScheduledTaskSettingsSet
-        $registerTask = New-ScheduledTask -Action $registerTaskAction -Principal $registerTaskPrincipal -Trigger $registerTaskTrigger -Settings $registerTaskSettings
-        Register-ScheduledTask Register-ChefNode -InputObject $registerTask
+        Register-ScheduledTask -TaskName Register-ChefNode -RunLevel Highest -User "$DomainName\$Username" -Password $Password -Action $registerTaskAction -Trigger $registerTaskTrigger -Settings $registerTaskSettings
         Start-ScheduledTask Install-ChefClient
-    } -ArgumentList $DomainName, $Username, $ChefClientDownloadUrl
+    } -ArgumentList $DomainName, $Username, $result, $ChefClientDownloadUrl
     Exit-PSSession
     
 }
@@ -150,7 +159,7 @@ function Bootstrap-LinuxNode {
 Write-Host "Please specify password for domain user (hidden secure string):"
 $Password = Read-Host -AsSecureString
 
-$pscred = New-Object System.Management.Automation.PSCredential ($Username, $Password)
+$pscred = New-Object System.Management.Automation.PSCredential ("$DomainName\$Username", $Password)
 
 if((Test-Path $SourceCsv) -eq $false){
     Write-Error "Target CSV not found. Check source path." -ErrorAction Stop
@@ -173,9 +182,8 @@ foreach($computer in $computers){
     $ipaddresses = $computer.{IP Address}.Split(',')
     $ipv4 = $ipaddresses | Where-Object {$_ -match '^((25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?)\.){3}(25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?)$'} | Select-Object $_ -First 1
     Write-Host "Preparing $ipv4 for bootstrap"
-
     if($computer.{Guest OS} -like 'Microsoft Windows*'){
-        Bootstrap-WindowsNode -PSCred $pscred -ComputerName $computer.{Name} -DomainName $DomainName -ChefClientDownloadUrl $ChefClientDownloadUrl -CustomerName $CustomerName -ChefServerUrl $ChefServerUrl -ValidatorName $ValidatorName -Environment $Environment -CertName $CertName
+        Bootstrap-WindowsNode -PSCred $pscred -ComputerName ($computer.{Name} + "." + $DomainName) -DomainName $DomainName -ChefClientDownloadUrl $ChefClientDownloadUrl -CustomerName $CustomerName -ChefServerUrl $ChefServerUrl -ValidatorName $ValidatorName -Environment $Environment -CertName $CertName -Username $Username -Password $Password
     }
     else{
         Bootstrap-LinuxNode

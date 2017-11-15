@@ -16,4 +16,4 @@
     * **NOTE: The script will prompt you for the password for the username provided via securestring prompt**
     * Optionally add `-CertName` to pass a trusted cert from this directory
 
-** NOTE: To reduce load on Chef Server the Scheduled Task to run Chef Client for the first time has a splay of 30 seconds to 15 minutes
+** NOTE: To reduce load on Chef Server the Scheduled Task to run Chef Client for the first time has a splay of 30 seconds to 15 minutes**
